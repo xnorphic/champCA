@@ -6,3 +6,5 @@ PyPDF2
 openai
 langchain
 faiss-cpu
+pydrive
+pandas
