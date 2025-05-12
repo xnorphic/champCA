@@ -12,7 +12,8 @@ st.sidebar.title("🔐 Auth & Setup")
 
 # --- Step 1: Save secret to temp file ---
 def save_client_secret():
-    secret_json_str = st.secrets["client_secret_json"]
+    # Load Google client secret JSON from Streamlit secrets
+    secret_json_str = st.secrets["google"]["client_secret_json"]
     temp_path = os.path.join(tempfile.gettempdir(), "client_secret.json")
     with open(temp_path, "w") as f:
         json.dump(json.loads(secret_json_str), f)
@@ -44,7 +45,9 @@ def load_files_from_folder(drive, folder_id):
 
 # --- Step 5: GPT-4.1-Nano Interaction ---
 def ask_gpt(context, query):
-    openai.api_key = st.secrets["openai_api_key"]
+    # Load OpenAI API key from Streamlit secrets
+    openai.api_key = st.secrets["openai"]["api_key"]
+    
     response = openai.ChatCompletion.create(
         model="gpt-4.1-nano-2025-04-14",
         messages=[
@@ -57,8 +60,10 @@ def ask_gpt(context, query):
 
 # --- Main UI ---
 st.title("📊 Company Data Comparison Chat")
+
+# Authenticate and list company folders
 drive = authenticate_drive()
-parent_folder_id = "1lQ536qAHRUTt7OT3cd5qzo2RwgL5UgjB"
+parent_folder_id = "1lQ536qAHRUTt7OT3cd5qzo2RwgL5UgjB"  # Google Drive folder ID
 
 company_folders = get_company_folders(drive, parent_folder_id)
 selected_companies = st.multiselect("Select companies to compare", list(company_folders.keys()))
