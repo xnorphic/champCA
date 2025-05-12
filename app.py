@@ -13,8 +13,8 @@ st.sidebar.title("🔐 Auth & Setup")
 # --- Step 1: Save service account credentials to temp file ---
 def save_service_account_credentials():
     try:
-        # Load service account JSON from Streamlit secrets
-        service_account_info = st.secrets["google"]["service_account"]
+        # Load service account JSON from Streamlit secrets using the correct key name
+        service_account_info = st.secrets["google"]["service_account_json"]  # Changed from service_account to service_account_json
         
         # Create temp file
         temp_path = os.path.join(tempfile.gettempdir(), "service_account.json")
