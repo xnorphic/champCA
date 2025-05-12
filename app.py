@@ -6,45 +6,43 @@ import tempfile
 import os
 import openai
 
-# --- Sidebar Setup ---
+# Streamlit setup
 st.set_page_config(page_title="Company Data Chat", layout="wide")
 st.sidebar.title("🔐 Auth & Setup")
 
-# --- Step 1: Save service account JSON to a temp file ---
-def save_service_account_json():
-    secret_json_str = st.secrets["google"]["service_account_json"]
-    temp_path = os.path.join(tempfile.gettempdir(), "service_account.json")
-    with open(temp_path, "w") as f:
-        json.dump(json.loads(secret_json_str), f)
-    return temp_path
+# Step 1: Save service account JSON to temp file
+def save_service_account():
+    sa_json = st.secrets["google"]["service_account_json"]
+    path = os.path.join(tempfile.gettempdir(), "service_account.json")
+    with open(path, "w") as f:
+        json.dump(json.loads(sa_json), f)
+    return path
 
-# --- Step 2: Authenticate using service account ---
+# Step 2: Authenticate with PyDrive2 using service account
 @st.cache_resource
 def authenticate_drive():
-    path = save_service_account_json()
-    auth_settings = {
-        "client_config_backend": "service",
-        "service_config": json.loads(open(path).read())
-    }
-    gauth = ServiceAccountAuth(settings=auth_settings)
+    path = save_service_account()
+    gauth = ServiceAccountAuth()
+    gauth.LoadServiceConfigFile(path)
+    gauth.Authorize()
     drive = GoogleDrive(gauth)
     return drive
 
-# --- Step 3: Load company subfolders ---
+# Step 3: Get subfolders (companies)
 def get_company_folders(drive, parent_folder_id):
     folder_list = drive.ListFile({
         'q': f"'{parent_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
     }).GetList()
     return {folder['title']: folder['id'] for folder in folder_list}
 
-# --- Step 4: Load files from company folder ---
+# Step 4: Load files from a folder
 def load_files_from_folder(drive, folder_id):
     file_list = drive.ListFile({
         'q': f"'{folder_id}' in parents and trashed=false"
     }).GetList()
     return {f['title']: f.GetContentString() for f in file_list}
 
-# --- Step 5: GPT-4.1-Nano Interaction ---
+# Step 5: Ask GPT-4
 def ask_gpt(context, query):
     openai.api_key = st.secrets["openai"]["api_key"]
     response = openai.ChatCompletion.create(
