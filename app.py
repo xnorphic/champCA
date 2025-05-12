@@ -1,9 +1,9 @@
 import streamlit as st
 import json
-import tempfile
 import os
 import openai
 import re
+import tempfile
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
@@ -11,39 +11,121 @@ from googleapiclient.discovery import build
 st.set_page_config(page_title="Company Data Chat", layout="wide")
 st.sidebar.title("🔐 Auth & Setup")
 
+# --- Debugging Helpers ---
+def debug_secrets():
+    """Helper function to debug secrets without exposing sensitive data"""
+    try:
+        # Check if google section exists
+        if "google" in st.secrets:
+            st.sidebar.success("✅ 'google' section found in secrets")
+            
+            # Check if service_account_json exists
+            if "service_account_json" in st.secrets["google"]:
+                sa_info = st.secrets["google"]["service_account_json"]
+                if isinstance(sa_info, str):
+                    st.sidebar.success(f"✅ 'service_account_json' found (type: string, length: {len(sa_info)})")
+                    
+                    # Check if it looks like a valid JSON
+                    if sa_info.strip().startswith("{") and sa_info.strip().endswith("}"):
+                        st.sidebar.success("✅ Credential string appears to be JSON-formatted")
+                    else:
+                        st.sidebar.error("❌ Credential string does not appear to be JSON-formatted")
+                else:
+                    st.sidebar.success(f"✅ 'service_account_json' found (type: {type(sa_info).__name__})")
+            else:
+                st.sidebar.error("❌ 'service_account_json' not found in google section")
+                
+            # Check what keys are available
+            keys = list(st.secrets["google"].keys())
+            st.sidebar.info(f"Available keys in google section: {', '.join(keys)}")
+        else:
+            st.sidebar.error("❌ 'google' section not found in secrets")
+            
+        # Check if openai section exists
+        if "openai" in st.secrets:
+            st.sidebar.success("✅ 'openai' section found in secrets")
+            if "api_key" in st.secrets["openai"]:
+                api_key = st.secrets["openai"]["api_key"]
+                st.sidebar.success(f"✅ OpenAI API key found (length: {len(api_key)})")
+            else:
+                st.sidebar.error("❌ 'api_key' not found in openai section")
+        else:
+            st.sidebar.error("❌ 'openai' section not found in secrets")
+            
+    except Exception as e:
+        st.sidebar.error(f"Error debugging secrets: {str(e)}")
+
 # --- Step 1: Authentication with Google Drive API ---
 def authenticate_drive():
     try:
-        # Load service account JSON from Streamlit secrets
-        service_account_info = st.secrets["google"]["service_account_json"]
+        # Check if we have the google section in secrets
+        if "google" not in st.secrets:
+            st.error("No 'google' section found in secrets.")
+            return None
+            
+        # Check which keys are available
+        available_keys = list(st.secrets["google"].keys())
         
-        # If service_account_info is a string, parse it
+        # Try different possible keys for service account info
+        service_account_info = None
+        possible_keys = ["service_account_json", "service_account", "credentials", "auth"]
+        
+        for key in possible_keys:
+            if key in st.secrets["google"]:
+                service_account_info = st.secrets["google"][key]
+                st.success(f"Found credentials using key: {key}")
+                break
+                
+        if service_account_info is None:
+            st.error(f"No service account credentials found. Available keys: {', '.join(available_keys)}")
+            return None
+        
+        # Create a temporary file to store the credentials
+        temp_creds_path = os.path.join(tempfile.gettempdir(), "google_creds.json")
+        
+        # If service_account_info is a string, save it to the temp file
         if isinstance(service_account_info, str):
+            # Clean up the JSON string
+            service_account_info = service_account_info.replace('\\n', '\n')
+            service_account_info = re.sub(r'[\x00-\x1F\x7F]', '', service_account_info)
+            
             try:
-                # Replace escaped newlines with actual newlines
-                service_account_info = service_account_info.replace('\\n', '\n')
-                # Remove any control characters
-                service_account_info = re.sub(r'[\x00-\x1F\x7F]', '', service_account_info)
-                service_account_dict = json.loads(service_account_info)
+                # Try to parse it as JSON
+                creds_dict = json.loads(service_account_info)
+                
+                # Write cleaned JSON to temp file
+                with open(temp_creds_path, 'w') as f:
+                    json.dump(creds_dict, f)
+                    
+                # Use the file for authentication
+                credentials = service_account.Credentials.from_service_account_file(
+                    temp_creds_path, 
+                    scopes=['https://www.googleapis.com/auth/drive']
+                )
             except json.JSONDecodeError as e:
-                st.error(f"Failed to parse service account JSON: {str(e)}")
+                st.error(f"Invalid JSON in service account credentials: {str(e)}")
                 return None
         else:
-            service_account_dict = service_account_info
-        
-        # Create credentials with google-auth
-        credentials = service_account.Credentials.from_service_account_info(
-            service_account_dict,
-            scopes=['https://www.googleapis.com/auth/drive']
-        )
+            # If it's already a dict, use it directly
+            try:
+                with open(temp_creds_path, 'w') as f:
+                    json.dump(service_account_info, f)
+                    
+                credentials = service_account.Credentials.from_service_account_file(
+                    temp_creds_path, 
+                    scopes=['https://www.googleapis.com/auth/drive']
+                )
+            except Exception as e:
+                st.error(f"Error writing credentials to file: {str(e)}")
+                return None
         
         # Build the Drive API client
         drive_service = build('drive', 'v3', credentials=credentials)
+        st.success("Successfully authenticated with Google Drive!")
         return drive_service
             
     except Exception as e:
         st.error(f"Authentication error: {str(e)}")
-        st.info("Please check your service account credentials in Streamlit secrets.")
         return None
 
 # --- Step 2: Get company folders using Drive API ---
@@ -80,7 +162,6 @@ def get_file_info(drive_service, files):
     
     for file in files:
         try:
-            file_id = file['id']
             file_name = file['name']
             mime_type = file.get('mimeType', 'unknown')
             
@@ -151,20 +232,52 @@ def ask_gpt(context, query):
 # --- Main UI ---
 st.title("📊 Company Data Comparison Chat")
 
+# Debug the secrets (doesn't expose sensitive data)
+debug_secrets()
+
 # Authentication
 drive_service = authenticate_drive()
 
 if drive_service is None:
     st.error("Failed to authenticate with Google Drive. Please check your configuration.")
     
-    # Provide troubleshooting help
+    # Manual credentials input option
+    st.subheader("Manual Authentication")
     st.markdown("""
-    ### Troubleshooting:
-    1. Check your service account JSON in secrets.toml for formatting issues
-    2. Make sure the service account has proper access to the Google Drive folder
-    3. Try creating a new service account with the necessary permissions
-    4. Verify that the Google Drive API is enabled for your project
+    If you're having trouble with secrets.toml, you can upload your service account JSON file directly:
     """)
+    
+    uploaded_file = st.file_uploader("Upload service account JSON file", type=["json"])
+    
+    if uploaded_file is not None:
+        try:
+            # Save the uploaded file to a temporary location
+            temp_path = os.path.join(tempfile.gettempdir(), "uploaded_creds.json")
+            with open(temp_path, "wb") as f:
+                f.write(uploaded_file.getvalue())
+            
+            # Create credentials from the file
+            credentials = service_account.Credentials.from_service_account_file(
+                temp_path,
+                scopes=['https://www.googleapis.com/auth/drive']
+            )
+            
+            # Build the Drive API client
+            drive_service = build('drive', 'v3', credentials=credentials)
+            st.success("Successfully authenticated with the uploaded credentials!")
+            
+            # Continue with the rest of the app...
+            # Parent folder ID
+            parent_folder_id = "1lQ536qAHRUTt7OT3cd5qzo2RwgL5UgjB"
+            company_folders = get_company_folders(drive_service, parent_folder_id)
+            
+            if not company_folders:
+                st.warning("No company folders found. Please check the parent folder ID.")
+            else:
+                # Rest of your app logic...
+                # (Copy from below)
+        except Exception as e:
+            st.error(f"Error with uploaded credentials: {str(e)}")
 else:
     # Parent folder ID
     parent_folder_id = "1lQ536qAHRUTt7OT3cd5qzo2RwgL5UgjB"
