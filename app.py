@@ -21,13 +21,17 @@ def save_service_account():
 # Step 2: Authenticate with PyDrive2 using service account
 @st.cache_resource
 def authenticate_drive():
-    path = save_service_account()
-    gauth = ServiceAccountAuth()
-    gauth.LoadServiceConfigFile(path)
-    gauth.Authorize()
+    credentials_path = save_service_account_credentials()
+    settings = {
+        "client_config_backend": "service",
+        "service_config": {
+            "client_json_file_path": credentials_path
+        }
+    }
+    gauth = GoogleAuth(settings=settings)
+    gauth.ServiceAuth()
     drive = GoogleDrive(gauth)
     return drive
-
 # Step 3: Get subfolders (companies)
 def get_company_folders(drive, parent_folder_id):
     folder_list = drive.ListFile({
