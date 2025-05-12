@@ -274,8 +274,40 @@ if drive_service is None:
             if not company_folders:
                 st.warning("No company folders found. Please check the parent folder ID.")
             else:
-                # Rest of your app logic...
-                # (Copy from below)
+                # Process company folders just like in the main flow
+                selected_companies = st.multiselect("Select companies to compare", list(company_folders.keys()))
+                
+                if selected_companies:
+                    combined_context = ""
+                    for company in selected_companies:
+                        st.subheader(f"📁 {company}")
+                        folder_id = company_folders[company]
+                        
+                        # List files in the folder
+                        files_list = list_files_in_folder(drive_service, folder_id)
+                        
+                        if not files_list:
+                            st.warning(f"No files found for {company}.")
+                        else:
+                            # Get file info
+                            files_info = get_file_info(drive_service, files_list)
+                            
+                            for fname, content in files_info.items():
+                                with st.expander(f"📄 {fname}"):
+                                    st.text_area("File Content", value=content, height=200, key=f"{company}_{fname}")
+                                combined_context += f"\n\n[{company} - {fname}]:\n{content}"
+                    
+                    # Chat Interface
+                    st.markdown("---")
+                    st.subheader("💬 Ask questions about the selected companies")
+                    user_query = st.text_input("Ask your question:")
+                    
+                    if user_query:
+                        with st.spinner("Thinking..."):
+                            answer = ask_gpt(combined_context, user_query)
+                            st.success(answer)
+                else:
+                    st.info("Please select at least one company to begin.")
         except Exception as e:
             st.error(f"Error with uploaded credentials: {str(e)}")
 else:
