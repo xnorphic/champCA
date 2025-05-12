@@ -5,8 +5,7 @@ import json
 import tempfile
 import os
 import openai
-import mimetypes
-import base64
+import re
 
 # --- Sidebar Setup ---
 st.set_page_config(page_title="Company Data Chat", layout="wide")
@@ -21,19 +20,47 @@ def save_service_account_credentials():
         # Create temp file
         temp_path = os.path.join(tempfile.gettempdir(), "service_account.json")
         
-        # If service_account_info is already a string, parse it
+        # If service_account_info is already a string, clean and parse it
         if isinstance(service_account_info, str):
-            # Replace escaped newlines with actual newlines if needed
+            # Clean up the JSON string - remove escaped characters and control characters
+            # Replace escaped newlines with actual newlines
             service_account_info = service_account_info.replace('\\n', '\n')
-            service_account_info = json.loads(service_account_info)
             
-        # Write to temp file
+            # Remove any control characters that might be causing the error
+            service_account_info = re.sub(r'[\x00-\x1F\x7F]', '', service_account_info)
+            
+            # Try to parse the JSON
+            try:
+                service_account_json = json.loads(service_account_info)
+            except json.JSONDecodeError as e:
+                # If that fails, try a manual approach to clean the string further
+                st.warning(f"JSON parsing error: {str(e)}. Attempting alternative parsing.")
+                
+                # Display the raw string for debugging (careful with sensitive info)
+                # st.write(service_account_info[:100] + "..." + service_account_info[-100:])
+                
+                # Write the raw string to the file and let the GoogleAuth handle it
+                with open(temp_path, "w") as f:
+                    f.write(service_account_info)
+                return temp_path
+        else:
+            # If it's already parsed, use it directly
+            service_account_json = service_account_info
+        
+        # Write the parsed JSON to the temp file
         with open(temp_path, "w") as f:
-            json.dump(service_account_info, f)
+            json.dump(service_account_json, f)
             
         return temp_path
     except Exception as e:
         st.error(f"Error saving credentials: {str(e)}")
+        
+        # For debugging - show the first few characters of the credential string
+        if isinstance(service_account_info, str):
+            # Be careful not to show too much of the private key
+            safe_debug = service_account_info[:100].replace('\n', '\\n') + "..."
+            st.error(f"First part of credential string: {safe_debug}")
+        
         raise
 
 # --- Step 2: Authenticate with Google Drive using service account ---
@@ -69,7 +96,7 @@ def get_company_folders(drive, parent_folder_id):
         st.error(f"Error loading company folders: {str(e)}")
         return {}
 
-# --- Step 4: Load files from company folder ---
+# --- Step 4: Load files from company folder (simplified) ---
 def load_files_from_folder(drive, folder_id):
     try:
         file_list = drive.ListFile({
@@ -78,51 +105,25 @@ def load_files_from_folder(drive, folder_id):
         
         result = {}
         for f in file_list:
-            try:
-                # Check mimetype to decide how to handle the file
-                mimetype = f.get('mimeType', '')
-                file_title = f['title']
-                
-                # Handle text files - only attempt GetContentString() for text files
-                if 'text/' in mimetype or mimetype in [
-                    'application/json', 
-                    'application/javascript',
-                    'application/xml'
-                ]:
-                    try:
-                        # Try UTF-8 decoding for text files
-                        content = f.GetContentString(encoding='utf-8')
-                    except UnicodeDecodeError:
-                        # If UTF-8 fails, try another common encoding
-                        try:
-                            content = f.GetContentString(encoding='latin-1')
-                        except:
-                            content = f"[Could not decode file contents: {file_title}]"
-                
-                # Handle Google Docs, Sheets, etc.
-                elif 'application/vnd.google-apps.' in mimetype:
-                    if mimetype == 'application/vnd.google-apps.document':
-                        content = f"[Google Doc: {file_title}]"
-                    elif mimetype == 'application/vnd.google-apps.spreadsheet':
-                        content = f"[Google Sheet: {file_title}]"
-                    elif mimetype == 'application/vnd.google-apps.presentation':
-                        content = f"[Google Slides: {file_title}]"
-                    else:
-                        content = f"[Google Apps file: {file_title}]"
-                
-                # Handle binary files - just show info, don't try to decode
+            file_title = f['title']
+            mime_type = f.get('mimeType', '')
+            
+            # For simplicity, just display file info without trying to decode contents
+            if 'application/vnd.google-apps.' in mime_type:
+                # Google Workspace files
+                if mime_type == 'application/vnd.google-apps.document':
+                    result[file_title] = "[Google Doc]"
+                elif mime_type == 'application/vnd.google-apps.spreadsheet':
+                    result[file_title] = "[Google Sheet]"
+                elif mime_type == 'application/vnd.google-apps.presentation':
+                    result[file_title] = "[Google Slides]"
                 else:
-                    ext = os.path.splitext(file_title)[1].lower()
-                    if ext in ['.pdf', '.docx', '.xlsx', '.pptx', '.doc', '.xls', '.ppt']:
-                        content = f"[Binary file: {file_title} ({ext} format)]"
-                    else:
-                        content = f"[Unsupported file: {file_title}]"
-                
-                result[file_title] = content
-            except Exception as file_error:
-                # Handle errors for individual files without failing the entire function
-                st.warning(f"Error processing file {f.get('title', 'unknown')}: {str(file_error)}")
-                result[f.get('title', f'Unknown file {hash(str(f))}')] = f"[Error loading file: {str(file_error)}]"
+                    result[file_title] = "[Google Workspace file]"
+            else:
+                # Regular files - just show the metadata
+                ext = os.path.splitext(file_title)[1].lower()
+                size = f.get('fileSize', 'unknown size')
+                result[file_title] = f"[File: {ext} format, {size} bytes]"
         
         return result
     except Exception as e:
@@ -162,6 +163,14 @@ drive = authenticate_drive()
 
 if drive is None:
     st.error("Failed to authenticate with Google Drive. Please check your configuration.")
+    
+    # Provide more detailed troubleshooting help
+    st.markdown("""
+    ### Troubleshooting:
+    1. Check your service account JSON in secrets.toml for any special characters or formatting issues
+    2. Make sure the service account has proper access to the Google Drive folder
+    3. Try recreating your service account and downloading a fresh JSON key
+    """)
 else:
     parent_folder_id = "1lQ536qAHRUTt7OT3cd5qzo2RwgL5UgjB"  # Google Drive folder ID
     company_folders = get_company_folders(drive, parent_folder_id)
