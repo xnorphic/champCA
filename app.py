@@ -5,6 +5,8 @@ import json
 import tempfile
 import os
 import openai
+import mimetypes
+import base64
 
 # --- Sidebar Setup ---
 st.set_page_config(page_title="Company Data Chat", layout="wide")
@@ -14,13 +16,15 @@ st.sidebar.title("🔐 Auth & Setup")
 def save_service_account_credentials():
     try:
         # Load service account JSON from Streamlit secrets using the correct key name
-        service_account_info = st.secrets["google"]["service_account_json"]  # Changed from service_account to service_account_json
+        service_account_info = st.secrets["google"]["service_account_json"]
         
         # Create temp file
         temp_path = os.path.join(tempfile.gettempdir(), "service_account.json")
         
         # If service_account_info is already a string, parse it
         if isinstance(service_account_info, str):
+            # Replace escaped newlines with actual newlines if needed
+            service_account_info = service_account_info.replace('\\n', '\n')
             service_account_info = json.loads(service_account_info)
             
         # Write to temp file
@@ -71,7 +75,56 @@ def load_files_from_folder(drive, folder_id):
         file_list = drive.ListFile({
             'q': f"'{folder_id}' in parents and trashed=false"
         }).GetList()
-        return {f['title']: f.GetContentString() for f in file_list}
+        
+        result = {}
+        for f in file_list:
+            try:
+                # Check mimetype to decide how to handle the file
+                mimetype = f.get('mimeType', '')
+                file_title = f['title']
+                
+                # Handle text files - only attempt GetContentString() for text files
+                if 'text/' in mimetype or mimetype in [
+                    'application/json', 
+                    'application/javascript',
+                    'application/xml'
+                ]:
+                    try:
+                        # Try UTF-8 decoding for text files
+                        content = f.GetContentString(encoding='utf-8')
+                    except UnicodeDecodeError:
+                        # If UTF-8 fails, try another common encoding
+                        try:
+                            content = f.GetContentString(encoding='latin-1')
+                        except:
+                            content = f"[Could not decode file contents: {file_title}]"
+                
+                # Handle Google Docs, Sheets, etc.
+                elif 'application/vnd.google-apps.' in mimetype:
+                    if mimetype == 'application/vnd.google-apps.document':
+                        content = f"[Google Doc: {file_title}]"
+                    elif mimetype == 'application/vnd.google-apps.spreadsheet':
+                        content = f"[Google Sheet: {file_title}]"
+                    elif mimetype == 'application/vnd.google-apps.presentation':
+                        content = f"[Google Slides: {file_title}]"
+                    else:
+                        content = f"[Google Apps file: {file_title}]"
+                
+                # Handle binary files - just show info, don't try to decode
+                else:
+                    ext = os.path.splitext(file_title)[1].lower()
+                    if ext in ['.pdf', '.docx', '.xlsx', '.pptx', '.doc', '.xls', '.ppt']:
+                        content = f"[Binary file: {file_title} ({ext} format)]"
+                    else:
+                        content = f"[Unsupported file: {file_title}]"
+                
+                result[file_title] = content
+            except Exception as file_error:
+                # Handle errors for individual files without failing the entire function
+                st.warning(f"Error processing file {f.get('title', 'unknown')}: {str(file_error)}")
+                result[f.get('title', f'Unknown file {hash(str(f))}')] = f"[Error loading file: {str(file_error)}]"
+        
+        return result
     except Exception as e:
         st.error(f"Error loading files: {str(e)}")
         return {}
@@ -81,6 +134,12 @@ def ask_gpt(context, query):
     try:
         # Load OpenAI API key from Streamlit secrets
         openai.api_key = st.secrets["openai"]["api_key"]
+        
+        # Truncate context if it's too long
+        max_context_length = 16000  # Adjust based on model limits
+        if len(context) > max_context_length:
+            st.warning(f"Context is too large ({len(context)} chars). Truncating to {max_context_length} chars.")
+            context = context[:max_context_length] + "\n\n[Note: Context was truncated due to size limits]"
         
         response = openai.ChatCompletion.create(
             model="gpt-4.1-nano-2025-04-14",
