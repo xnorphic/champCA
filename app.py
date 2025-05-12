@@ -25,7 +25,7 @@ def authenticate_drive():
     path = save_client_secret()
     gauth = GoogleAuth()
     gauth.LoadClientConfigFile(path)
-    gauth.LocalWebserverAuth()
+    gauth.CommandLineAuth()  # <--- This works on Streamlit Cloud
     drive = GoogleDrive(gauth)
     return drive
 
