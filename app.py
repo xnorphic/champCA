@@ -4,8 +4,17 @@ import os
 import openai
 import re
 import tempfile
+import io
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
+
+# Try to import PyPDF2 for PDF extraction
+try:
+    import PyPDF2
+    HAS_PYPDF2 = True
+except ImportError:
+    HAS_PYPDF2 = False
 
 # --- Sidebar Setup ---
 st.set_page_config(page_title="Company Data Chat", layout="wide")
@@ -54,6 +63,31 @@ def debug_secrets():
             
     except Exception as e:
         st.sidebar.error(f"Error debugging secrets: {str(e)}")
+
+# --- Function to extract PDF content ---
+def extract_pdf_content(drive_service, file_id):
+    if not HAS_PYPDF2:
+        return "[PDF extraction requires PyPDF2 library. Add 'PyPDF2' to your requirements.txt.]"
+        
+    try:
+        request = drive_service.files().get_media(fileId=file_id)
+        file_content = io.BytesIO()
+        downloader = MediaIoBaseDownload(file_content, request)
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+        
+        file_content.seek(0)
+        pdf_reader = PyPDF2.PdfReader(file_content)
+        
+        # Extract text from all pages
+        text = ""
+        for page_num in range(len(pdf_reader.pages)):
+            text += pdf_reader.pages[page_num].extract_text() + "\n\n"
+        
+        return text
+    except Exception as e:
+        return f"[Error extracting PDF content: {str(e)}]"
 
 # --- Step 1: Authentication with Google Drive API ---
 def authenticate_drive():
@@ -156,12 +190,13 @@ def list_files_in_folder(drive_service, folder_id):
         st.error(f"Error listing files: {str(e)}")
         return []
 
-# --- Step 4: Get file metadata ---
+# --- Step 4: Get file metadata and content ---
 def get_file_info(drive_service, files):
     result = {}
     
     for file in files:
         try:
+            file_id = file['id']
             file_name = file['name']
             mime_type = file.get('mimeType', 'unknown')
             
@@ -176,6 +211,9 @@ def get_file_info(drive_service, files):
                     file_info = f"[Google Slides: {file_name}]"
                 else:
                     file_info = f"[Google Workspace file: {file_name}]"
+            elif mime_type == 'application/pdf':
+                # Extract content from PDF
+                file_info = extract_pdf_content(drive_service, file_id)
             else:
                 # For regular files, just show metadata
                 size = file.get('size', 'unknown size')
@@ -229,11 +267,32 @@ def ask_gpt(context, query):
         st.error(f"Error calling OpenAI API: {str(e)}")
         return "Sorry, I encountered an error while processing your question."
 
+# --- Manual Data Input Function ---
+def add_manual_data():
+    st.subheader("Add Manual Financial Data")
+    
+    with st.form("manual_data_form"):
+        company = st.text_input("Company Name")
+        metric = st.text_input("Metric (e.g., Revenue, Net Profit)")
+        fy22 = st.text_input("FY22 Value")
+        fy23 = st.text_input("FY23 Value")
+        
+        submit = st.form_submit_button("Add Data")
+        
+        if submit and company and metric:
+            data = f"{metric} FY22: {fy22}\n{metric} FY23: {fy23}\n"
+            return company, data
+    
+    return None, None
+
 # --- Main UI ---
 st.title("📊 Company Data Comparison Chat")
 
 # Debug the secrets (doesn't expose sensitive data)
 debug_secrets()
+
+# Add option for manual data input
+show_manual_input = st.sidebar.checkbox("Add manual financial data")
 
 # Authentication
 drive_service = authenticate_drive()
@@ -290,43 +349,19 @@ if drive_service is None:
                             st.warning(f"No files found for {company}.")
                         else:
                             # Get file info
-   # --- Step 4: Get file metadata and content ---
-def get_file_info(drive_service, files):
-    result = {}
-    
-    for file in files:
-        try:
-            file_id = file['id']
-            file_name = file['name']
-            mime_type = file.get('mimeType', 'unknown')
-            
-            # Handle different file types
-            if 'application/vnd.google-apps.' in mime_type:
-                # Google Workspace files
-                if mime_type == 'application/vnd.google-apps.document':
-                    file_info = f"[Google Doc: {file_name}]"
-                elif mime_type == 'application/vnd.google-apps.spreadsheet':
-                    file_info = f"[Google Sheet: {file_name}]"
-                elif mime_type == 'application/vnd.google-apps.presentation':
-                    file_info = f"[Google Slides: {file_name}]"
-                else:
-                    file_info = f"[Google Workspace file: {file_name}]"
-            elif mime_type == 'application/pdf':
-                # Extract content from PDF
-                file_info = extract_pdf_content(drive_service, file_id)
-            else:
-                # For regular files, just show metadata
-                size = file.get('size', 'unknown size')
-                ext = os.path.splitext(file_name)[1].lower()
-                file_info = f"[File: {file_name}, Type: {mime_type}, Extension: {ext}]"
-                
-            result[file_name] = file_info
-            
-        except Exception as e:
-            st.warning(f"Error processing file {file.get('name', 'unknown')}: {str(e)}")
-            result[file.get('name', f'Unknown file')] = f"[Error: {str(e)}]"
-    
-    return result
+                            files_info = get_file_info(drive_service, files_list)
+                            
+                            for fname, content in files_info.items():
+                                with st.expander(f"📄 {fname}"):
+                                    st.text_area("File Content", value=content, height=200, key=f"{company}_{fname}")
+                                combined_context += f"\n\n[{company} - {fname}]:\n{content}"
+                    
+                    # Manual data input option
+                    if show_manual_input:
+                        manual_company, manual_data = add_manual_data()
+                        if manual_company and manual_data:
+                            combined_context += f"\n\n[{manual_company} - Manual Data]:\n{manual_data}"
+                            st.success(f"Added manual data for {manual_company}")
                     
                     # Chat Interface
                     st.markdown("---")
@@ -370,6 +405,13 @@ else:
                         with st.expander(f"📄 {fname}"):
                             st.text_area("File Content", value=content, height=200, key=f"{company}_{fname}")
                         combined_context += f"\n\n[{company} - {fname}]:\n{content}"
+            
+            # Manual data input option
+            if show_manual_input:
+                manual_company, manual_data = add_manual_data()
+                if manual_company and manual_data:
+                    combined_context += f"\n\n[{manual_company} - Manual Data]:\n{manual_data}"
+                    st.success(f"Added manual data for {manual_company}")
             
             # Chat Interface
             st.markdown("---")
