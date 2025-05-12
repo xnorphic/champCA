@@ -290,12 +290,43 @@ if drive_service is None:
                             st.warning(f"No files found for {company}.")
                         else:
                             # Get file info
-                            files_info = get_file_info(drive_service, files_list)
-                            
-                            for fname, content in files_info.items():
-                                with st.expander(f"📄 {fname}"):
-                                    st.text_area("File Content", value=content, height=200, key=f"{company}_{fname}")
-                                combined_context += f"\n\n[{company} - {fname}]:\n{content}"
+   # --- Step 4: Get file metadata and content ---
+def get_file_info(drive_service, files):
+    result = {}
+    
+    for file in files:
+        try:
+            file_id = file['id']
+            file_name = file['name']
+            mime_type = file.get('mimeType', 'unknown')
+            
+            # Handle different file types
+            if 'application/vnd.google-apps.' in mime_type:
+                # Google Workspace files
+                if mime_type == 'application/vnd.google-apps.document':
+                    file_info = f"[Google Doc: {file_name}]"
+                elif mime_type == 'application/vnd.google-apps.spreadsheet':
+                    file_info = f"[Google Sheet: {file_name}]"
+                elif mime_type == 'application/vnd.google-apps.presentation':
+                    file_info = f"[Google Slides: {file_name}]"
+                else:
+                    file_info = f"[Google Workspace file: {file_name}]"
+            elif mime_type == 'application/pdf':
+                # Extract content from PDF
+                file_info = extract_pdf_content(drive_service, file_id)
+            else:
+                # For regular files, just show metadata
+                size = file.get('size', 'unknown size')
+                ext = os.path.splitext(file_name)[1].lower()
+                file_info = f"[File: {file_name}, Type: {mime_type}, Extension: {ext}]"
+                
+            result[file_name] = file_info
+            
+        except Exception as e:
+            st.warning(f"Error processing file {file.get('name', 'unknown')}: {str(e)}")
+            result[file.get('name', f'Unknown file')] = f"[Error: {str(e)}]"
+    
+    return result
                     
                     # Chat Interface
                     st.markdown("---")
