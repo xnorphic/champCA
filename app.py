@@ -1,5 +1,5 @@
 import streamlit as st
-from pydrive2.auth import ServiceAccountAuth
+from pydrive2.auth import GoogleAuth  # Correct import
 from pydrive2.drive import GoogleDrive
 import json
 import tempfile
