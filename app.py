@@ -1,6 +1,6 @@
 import streamlit as st
-from pydrive.auth import GoogleAuth
-from pydrive.drive import GoogleDrive
+from pydrive2.auth import ServiceAccountAuth
+from pydrive2.drive import GoogleDrive
 import json
 import tempfile
 import os
@@ -10,22 +10,23 @@ import openai
 st.set_page_config(page_title="Company Data Chat", layout="wide")
 st.sidebar.title("🔐 Auth & Setup")
 
-# --- Step 1: Save secret to temp file ---
-def save_client_secret():
-    # Load Google client secret JSON from Streamlit secrets
-    secret_json_str = st.secrets["google"]["client_secret_json"]
-    temp_path = os.path.join(tempfile.gettempdir(), "client_secret.json")
+# --- Step 1: Save service account JSON to a temp file ---
+def save_service_account_json():
+    secret_json_str = st.secrets["google"]["service_account_json"]
+    temp_path = os.path.join(tempfile.gettempdir(), "service_account.json")
     with open(temp_path, "w") as f:
         json.dump(json.loads(secret_json_str), f)
     return temp_path
 
-# --- Step 2: Authenticate with Google Drive ---
+# --- Step 2: Authenticate using service account ---
 @st.cache_resource
 def authenticate_drive():
-    path = save_client_secret()
-    gauth = GoogleAuth()
-    gauth.LoadClientConfigFile(path)
-    gauth.CommandLineAuth()  # <--- This works on Streamlit Cloud
+    path = save_service_account_json()
+    auth_settings = {
+        "client_config_backend": "service",
+        "service_config": json.loads(open(path).read())
+    }
+    gauth = ServiceAccountAuth(settings=auth_settings)
     drive = GoogleDrive(gauth)
     return drive
 
@@ -45,9 +46,7 @@ def load_files_from_folder(drive, folder_id):
 
 # --- Step 5: GPT-4.1-Nano Interaction ---
 def ask_gpt(context, query):
-    # Load OpenAI API key from Streamlit secrets
     openai.api_key = st.secrets["openai"]["api_key"]
-    
     response = openai.ChatCompletion.create(
         model="gpt-4.1-nano-2025-04-14",
         messages=[
@@ -61,9 +60,8 @@ def ask_gpt(context, query):
 # --- Main UI ---
 st.title("📊 Company Data Comparison Chat")
 
-# Authenticate and list company folders
 drive = authenticate_drive()
-parent_folder_id = "1lQ536qAHRUTt7OT3cd5qzo2RwgL5UgjB"  # Google Drive folder ID
+parent_folder_id = "1lQ536qAHRUTt7OT3cd5qzo2RwgL5UgjB"
 
 company_folders = get_company_folders(drive, parent_folder_id)
 selected_companies = st.multiselect("Select companies to compare", list(company_folders.keys()))
@@ -78,7 +76,6 @@ if selected_companies:
                 st.text_area("File Content", value=content, height=200, key=f"{company}_{fname}")
             combined_context += f"\n\n[{company} - {fname}]:\n{content}"
 
-    # Chat Interface
     st.markdown("---")
     st.subheader("💬 Ask questions about the selected companies")
     user_query = st.text_input("Ask your question:")
