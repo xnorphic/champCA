@@ -2,3 +2,4 @@ streamlit
 openai
 google-auth
 google-api-python-client
+PyPDF2
